@@ -3,9 +3,10 @@
  * Description  :     Example code tiny32 board interface with SX1278 to be LoRa Master
  * Hardware     :     tiny32_v3
  * Author       :     Tenergy Innovation Co., Ltd.
- * Date         :     04/07/2022
- * Revision     :     1.0
+ * Date         :     28/11/2024
+ * Revision     :     1.1
  * Rev1.0       :     Origital
+ * Rev1.1       :     check and filter duplicate data
  * website      :     http://www.tenergyinnovation.co.th
  * Email        :     uten.boonliam@tenergyinnovation.co.th
  * TEL          :     +66 89-140-7205
@@ -21,7 +22,7 @@
 /**************************************/
 /*          Firmware Version          */
 /**************************************/
-#define FIRMWARE_VERSION "0.5"
+#define FIRMWARE_VERSION "1.1"
 
 /**************************************/
 /*          Header project            */
@@ -35,7 +36,6 @@ void header_print(void)
     Serial.printf("* Author       :     Tenergy Innovation Co., Ltd.\r\n");
     Serial.printf("* Date         :     04/07/2022\r\n");
     Serial.printf("* Revision     :     %s\r\n", FIRMWARE_VERSION);
-    Serial.printf("* Rev1.0       :     Origital\r\n");
     Serial.printf("* website      :     http://www.tenergyinnovation.co.th\r\n");
     Serial.printf("* Email        :     uten.boonliam@tenergyinnovation.co.th\r\n");
     Serial.printf("* TEL          :     +66 89-140-7205\r\n");
@@ -92,6 +92,7 @@ byte msgCount = 0;             // count of outgoing messages
 byte LoRa_ID_Gateway = 1;      // LoRa Gate Way ID {Every Client will indicate to this ID}
 byte LoRa_ID_local = 1;        // address of this device **
 byte LoRa_ID_destination = 99; // 0x99 is mean all client node **
+byte LoRa_Client_ID_2 = 2;
 long lastSendTime = 0;
 
 struct param_LoRa
@@ -118,9 +119,9 @@ byte incomingMsgId_LoRa = 0;
 /**************************************/
 /*           define function          */
 /**************************************/
-void LoRa_onReceive(int packetSize);                                    // LoRa get message funct
-void LoRa_sendMessage(String outgoing);                                 // LoRa send message funct
-void LoRa_sendMessage_toDestination(byte destination, String outgoing); // LoRa send message funct
+void LoRa_onReceive(int packetSize);                                                    // LoRa get message funct
+void LoRa_sendMessage(String outgoing);                                                 // LoRa send message funct
+void LoRa_sendMessage_toDestination(String outgoing, byte destination = LoRa_Client_ID_2); // LoRa send message funct
 bool LoRa_ConvertParam(String incoming);
 
 /***********************************************************************
@@ -179,26 +180,27 @@ void loop()
     esp_task_wdt_reset();
     vTaskDelay(100);
 
-    //send command via RoLa to ON Relay
-    if(mcu.Sw1())
+    // send command via RoLa to ON Relay
+    if (mcu.Sw1())
     {
         mcu.buzzer_beep(1);
         Serial.printf("Info: RELAY ON\r\n");
-        while(mcu.Sw1());
+        while (mcu.Sw1())
+            ;
         String _cmd = "relay:on";
-        LoRa_sendMessage_toDestination(2,_cmd);
+        LoRa_sendMessage_toDestination(_cmd, LoRa_Client_ID_2);
         vTaskDelay(100);
     }
 
-
-    //send command via RoLa to ON Relay
-    if(mcu.Sw2())
+    // send command via RoLa to ON Relay
+    if (mcu.Sw2())
     {
         mcu.buzzer_beep(1);
         Serial.printf("Info: RELAY OFF\r\n");
-        while(mcu.Sw1());
+        while (mcu.Sw1())
+            ;
         String _cmd = "relay:off";
-        LoRa_sendMessage_toDestination(2,_cmd);
+        LoRa_sendMessage_toDestination(_cmd,LoRa_Client_ID_2);
         vTaskDelay(100);
     }
 }
@@ -211,6 +213,8 @@ void loop()
  ***********************************************************************/
 void LoRa_onReceive(int packetSize)
 {
+    static int _LoRa_sentForm = 0;
+    static byte _LoRa_MessageID = 0;
     if (packetSize == 0)
         return; // if there's no packet, return
 
@@ -228,14 +232,28 @@ void LoRa_onReceive(int packetSize)
     {
         incoming += (char)LoRa.read();
     }
-    Serial.printf("\r\n\r\n-----------------------------------------------------------------\r\n");
-    Serial.printf("Debug: incomingLength = %d\r\n", incomingLength);
+    // Serial.printf("\r\n\r\n-----------------------------------------------------------------\r\n");
+    // Serial.printf("Debug: incomingLength = %d\r\n", incomingLength);
 
     if (incomingLength != incoming.length())
     { // check length for error
-        Serial.println("error: message length does not match length");
+        // Serial.println("error: message length does not match length");
         return; // skip rest of function
     }
+
+
+    Serial.printf("Previde data: %d [%d] Dulication data\r\n", _LoRa_sentForm, _LoRa_MessageID);
+    if ((sender == _LoRa_sentForm) && (incomingMsgId == _LoRa_MessageID))
+    {
+        Serial.printf("Error: %d [%d] Dulication data\r\n", recipient, incomingMsgId);
+        return;
+    }
+    else
+    {
+        _LoRa_sentForm = sender;
+        _LoRa_MessageID = incomingMsgId;
+    }
+
     mcu.RedLED(1);
     // if message is for this device, or broadcast, print details:
     Serial.println("Received from: 0x" + String(sender, HEX));
@@ -260,13 +278,14 @@ void LoRa_onReceive(int packetSize)
     bool _LoRa_result = LoRa_ConvertParam(incoming);
     if (_LoRa_result) // check project name is correct or not?
     {
-        //do something
+        // do something
     }
     else
     {
-        //do something 
+        // do something
     }
     mcu.RedLED(0);
+    Serial.println("------------------------------------");
 }
 
 /***********************************************************************
@@ -302,7 +321,7 @@ void LoRa_sendMessage(String outgoing)
  * PARAMETERS:  byte destination , String outgoing ** ขนาดห้ามเกิน 250 BYTE **
  * RETURNED:    nothing
  ***********************************************************************/
-void LoRa_sendMessage_toDestination(byte destination, String outgoing)
+void LoRa_sendMessage_toDestination(String outgoing, byte destination)
 {
     Serial.printf("outgoing.length() = %d\r\n", outgoing.length());
     if (outgoing.length() > 250)
